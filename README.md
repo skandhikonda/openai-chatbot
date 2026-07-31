@@ -43,7 +43,7 @@ python simple_chatbot.py
 Then open your browser at:
 
 ```text
-http://127.0.0.1:8000/
+http://mychatbot.local:8000/
 ```
 
 ## Usage
