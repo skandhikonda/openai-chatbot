@@ -1,28 +1,36 @@
-import os
+import logging
 import uuid
 from typing import Dict, List, Optional
+
+import uvicorn
 from dotenv import load_dotenv
-from fastapi import Cookie, FastAPI, HTTPException, Request, Response
+from fastapi import Cookie, FastAPI, HTTPException, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
-from openai import OpenAI
-import uvicorn
+
+from chatbot_app.services.chat_service import ChatService
+
 
 load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
 
-if not api_key:
-    raise RuntimeError("OPENAI_API_KEY not found in environment. Please create a .env file.")
+logger = logging.getLogger("chatbot.api")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(handler)
 
-client = OpenAI(api_key=api_key)
-app = FastAPI()
+
+app = FastAPI(title="OpenAI Chatbot")
+service = ChatService()
+
 session_histories: Dict[str, List[dict]] = {}
 
 HTML_PAGE = """<!DOCTYPE html>
-<html lang="en">
+<html lang=\"en\">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset=\"UTF-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
   <title>OpenAI Chatbot</title>
   <style>
     body { font-family: Arial, sans-serif; background: #f4f7fb; margin: 0; padding: 0; }
@@ -39,13 +47,13 @@ HTML_PAGE = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class=\"container\">
     <h1>OpenAI Chatbot</h1>
-    <div class="chat-box">
-      <div id="messages"></div>
+    <div class=\"chat-box\">
+      <div id=\"messages\"></div>
       <div>
-        <input id="userInput" type="text" placeholder="Type your message here..." autocomplete="off" />
-        <button id="sendButton">Send</button>
+        <input id=\"userInput\" type=\"text\" placeholder=\"Type your message here...\" autocomplete=\"off\" />
+        <button id=\"sendButton\">Send</button>
       </div>
     </div>
   </div>
@@ -105,10 +113,11 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     });
 
-    appendMessage('system', 'Type a message to begin chatting. Type "exit" to end the session.');
+    appendMessage('system', 'Type a message to begin chatting. Type \"exit\" to end the session.');
   </script>
 </body>
 </html>"""
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -142,22 +151,33 @@ def chat(request: ChatRequest, response: Response, session_id: Optional[str] = C
     if user_message.lower() == 'exit':
         session_histories.pop(session_id, None)
         response.set_cookie(key='session_id', value='', max_age=0)
-        return JSONResponse({"reply": "Goodbye! Your session has ended.", "ended": True})
+        return JSONResponse({
+            "reply": "Goodbye! Your session has ended.",
+            "confidence": 1.0,
+            "ended": True,
+            "evaluation": {"passed": True, "score": 1.0, "issues": [], "summary": "Session closed."},
+        })
 
     history.append({"role": "user", "content": user_message})
 
     try:
-        completion = client.chat.completions.create(
-            model='gpt-3.5-turbo',
-            messages=history,
-            max_tokens=150,
-        )
-        assistant_message = completion.choices[0].message.content.strip()
-        history.append({"role": "assistant", "content": assistant_message})
+        chat_response = service.generate_reply(history=history, user_message=user_message)
+        history.append({"role": "assistant", "content": chat_response.reply})
         response.set_cookie(key='session_id', value=session_id, httponly=True)
-        return {"reply": assistant_message, "ended": False}
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=str(err))
+        return {
+            "reply": chat_response.reply,
+            "confidence": chat_response.confidence,
+            "ended": chat_response.ended,
+            "evaluation": {
+                "passed": chat_response.evaluation.passed,
+                "score": chat_response.evaluation.score,
+                "issues": chat_response.evaluation.issues,
+                "summary": chat_response.evaluation.summary,
+            },
+        }
+    except Exception as exc:
+        logger.exception("Chat request failed for session %s", session_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 if __name__ == '__main__':
