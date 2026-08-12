@@ -97,6 +97,8 @@ Then open:
 
 ```text
 http://127.0.0.1:8000/
+Modify the C:\Windows\System32\drivers\etc\hosts file to add the user defined api endpoint.
+http://mychatbot.local:8000
 ```
 
 ## Example Output
